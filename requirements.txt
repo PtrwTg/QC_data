@@ -1,0 +1,4 @@
+flask
+pandas
+xlwings
+filelock
