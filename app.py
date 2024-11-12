@@ -1,10 +1,15 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 import pandas as pd
 import datetime
 from filelock import FileLock
 from functools import lru_cache
+from io import BytesIO
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
+
+# รหัสผ่านสำหรับการเข้าถึงหน้า Export
+EXPORT_PASSWORD = '935673'
 
 # กำหนดชื่อไฟล์ CSV
 EMPLOYEES_CSV = 'Employer.csv'
@@ -14,6 +19,9 @@ AUTOCOMPLETE_CSV = 'Autocomplete.csv'
 REMARK_CSV = 'Remark.csv'
 
 LOCK_PATH = 'data.lock'
+
+# ตั้งค่า Timezone ของประเทศไทย
+TH_TZ = ZoneInfo('Asia/Bangkok')
 
 def load_data():
     with FileLock(LOCK_PATH):
@@ -27,31 +35,31 @@ def load_data():
 
         # โหลดข้อมูลจากไฟล์ CSV
         try:
-            employees_df = pd.read_csv(EMPLOYEES_CSV)
+            employees_df = pd.read_csv(EMPLOYEES_CSV, encoding='utf-8-sig')
             employees = employees_df.to_dict('records')
         except Exception as e:
             print(f"Error loading {EMPLOYEES_CSV}: {e}")
 
         try:
-            mill_extrude_df = pd.read_csv(MILL_EXTRUDE_CSV)
+            mill_extrude_df = pd.read_csv(MILL_EXTRUDE_CSV, encoding='utf-8-sig')
             extrude_options = mill_extrude_df['Extrude'].dropna().astype(str).tolist()
             mill_options = mill_extrude_df['Mill'].dropna().astype(str).tolist()
         except Exception as e:
             print(f"Error loading {MILL_EXTRUDE_CSV}: {e}")
 
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
             sample_data_df['Batch'] = sample_data_df['Batch'].astype(str)
         except Exception as e:
             print(f"Error loading {SAMPLE_DATA_CSV}: {e}")
 
         try:
-            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV)
+            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV, encoding='utf-8-sig')
         except Exception as e:
             print(f"Error loading {AUTOCOMPLETE_CSV}: {e}")
 
         try:
-            remark_df = pd.read_csv(REMARK_CSV)
+            remark_df = pd.read_csv(REMARK_CSV, encoding='utf-8-sig')
             remark_options = remark_df['Remark'].dropna().tolist()
         except Exception as e:
             print(f"Error loading {REMARK_CSV}: {e}")
@@ -76,11 +84,11 @@ def get_autocomplete_data():
         sample_data_df = pd.DataFrame()
         autocomplete_df = pd.DataFrame()
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
         except Exception as e:
             print(f"Error loading {SAMPLE_DATA_CSV}: {e}")
         try:
-            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV)
+            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV, encoding='utf-8-sig')
         except Exception as e:
             print(f"Error loading {AUTOCOMPLETE_CSV}: {e}")
         return sample_data_df, autocomplete_df
@@ -107,7 +115,7 @@ def start_sample():
 
     with FileLock(LOCK_PATH):
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
 
             required_fields = ['employee', 'shift', 'sku', 'batch', 'box_no', 'quantity', 'remark', 'extrude', 'mill']
             if not all(data.get(field) for field in required_fields):
@@ -120,11 +128,12 @@ def start_sample():
             if not ongoing_sample.empty and not force_save:
                 return jsonify({'success': False, 'message': 'คุณมีการทดสอบที่ยังไม่เสร็จสิ้น', 'confirm': True})
 
-            start_time = datetime.datetime.now()
+            # ใช้เวลาใน Timezone ของประเทศไทย
+            start_time = datetime.datetime.now(TH_TZ)
             shift_date = start_time.date() if 8 <= start_time.hour <= 23 else start_time.date() - datetime.timedelta(days=1)
 
             new_data = {
-                'Start Time': start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                'Start Time': start_time.strftime("%d/%m/%Y %H:%M:%S"),
                 'Stop Time': '',
                 'SKU': data['sku'].upper(),
                 'Batch': data['batch'],
@@ -143,7 +152,8 @@ def start_sample():
 
             sample_data_df = pd.concat([sample_data_df, pd.DataFrame([new_data])], ignore_index=True)
 
-            sample_data_df.to_csv(SAMPLE_DATA_CSV, index=False)
+            # บันทึกด้วย encoding='utf-8-sig'
+            sample_data_df.to_csv(SAMPLE_DATA_CSV, index=False, encoding='utf-8-sig')
 
             return jsonify({'success': True})
         except Exception as e:
@@ -153,14 +163,16 @@ def start_sample():
 def get_ongoing_samples():
     with FileLock(LOCK_PATH):
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
 
             ongoing_samples = sample_data_df[sample_data_df['Stop Time'].isna() | (sample_data_df['Stop Time'] == '')]
 
             samples_list = []
             for index, row in ongoing_samples.iterrows():
-                start_time = pd.to_datetime(row['Start Time'])
-                duration = datetime.datetime.now() - start_time
+                start_time = pd.to_datetime(row['Start Time'], dayfirst=True)
+                # ตั้งค่า Timezone ของเวลาที่เริ่ม
+                start_time = start_time.replace(tzinfo=TH_TZ)
+                duration = datetime.datetime.now(TH_TZ) - start_time
                 duration_minutes = int(duration.total_seconds() / 60)
 
                 samples_list.append({
@@ -168,7 +180,7 @@ def get_ongoing_samples():
                     'employee': row['Employee'],
                     'sku': row['SKU'],
                     'batch': row['Batch'],
-                    'start_time': row['Start Time'],
+                    'start_time': start_time.strftime("%d/%m/%Y %H:%M:%S"),
                     'duration_minutes': duration_minutes
                 })
 
@@ -183,27 +195,56 @@ def stop_sample():
 
     with FileLock(LOCK_PATH):
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
 
             if row_index is None or row_index >= len(sample_data_df):
                 return jsonify({'success': False, 'message': 'ไม่พบข้อมูลตัวอย่างที่เลือก'})
 
-            stop_time = datetime.datetime.now()
-            sample_data_df.at[row_index, 'Stop Time'] = stop_time.strftime("%Y-%m-%d %H:%M:%S")
+            # ใช้เวลาใน Timezone ของประเทศไทย
+            stop_time = datetime.datetime.now(TH_TZ)
+            sample_data_df.at[row_index, 'Stop Time'] = stop_time.strftime("%d/%m/%Y %H:%M:%S")
             sample_data_df.at[row_index, 'Stop_Worktime'] = stop_time.strftime("%H:%M:%S")
 
-            start_time = pd.to_datetime(sample_data_df.at[row_index, 'Start Time'])
+            start_time = pd.to_datetime(sample_data_df.at[row_index, 'Start Time'], dayfirst=True)
+            # ตั้งค่า Timezone ของเวลาที่เริ่ม
+            start_time = start_time.replace(tzinfo=TH_TZ)
             duration = stop_time - start_time
             total_seconds = int(duration.total_seconds())
             hours, remainder = divmod(total_seconds, 3600)
             minutes, seconds = divmod(remainder, 60)
             sample_data_df.at[row_index, 'Duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-            sample_data_df.to_csv(SAMPLE_DATA_CSV, index=False)
+            # บันทึกด้วย encoding='utf-8-sig'
+            sample_data_df.to_csv(SAMPLE_DATA_CSV, index=False, encoding='utf-8-sig')
 
             return jsonify({'success': True})
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)})
+
+# เพิ่มเส้นทางสำหรับหน้า Export ที่ป้องกันด้วยรหัสผ่าน
+@app.route('/export', methods=['GET', 'POST'])
+def export():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == EXPORT_PASSWORD:
+            return redirect(url_for('download_data'))
+        else:
+            error = 'รหัสผ่านไม่ถูกต้อง'
+            return render_template('export.html', error=error)
+    return render_template('export.html')
+
+# เส้นทางสำหรับดาวน์โหลดไฟล์ Sample_Shift_Data.csv
+@app.route('/download_data')
+def download_data():
+    try:
+        return send_file(
+            SAMPLE_DATA_CSV,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name='Sample_Shift_Data.csv'
+        )
+    except Exception as e:
+        return f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {e}"
 
 if __name__ == '__main__':
     app.run(debug=True)
