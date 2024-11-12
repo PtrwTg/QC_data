@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>เลือกข้อมูลเพื่อแก้ไข</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h2>เลือกประเภทข้อมูลที่ต้องการแก้ไข</h2>
+        <form method="post" action="{{ url_for('edit_data') }}">
+            <div class="form-group">
+                <label for="data_type">ประเภทข้อมูล:</label>
+                <select id="data_type" name="data_type" required>
+                    <option value="" disabled selected>เลือกประเภทข้อมูล</option>
+                    {% for type in data_types %}
+                        <option value="{{ type }}">{{ type.replace('_', ' ').title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn">ไปยังการแก้ไข</button>
+        </form>
+    </div>
+</body>
+</html>

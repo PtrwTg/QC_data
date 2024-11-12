@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <title>แก้ไขข้อมูล {{ data_type.replace('_', ' ').title() }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script>
+        async function sendData(action, record) {
+            const response = await fetch('', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ action, record }),
+            });
+            const result = await response.json();
+            if (result.success) {
+                location.reload();
+            } else {
+                alert('Error: ' + result.message);
+            }
+        }
+
+        function addRow() {
+            const columns = {{ columns|tojson }};
+            const newRow = {};
+            columns.forEach(col => {
+                newRow[col] = '';
+            });
+            sendData('add', newRow);
+        }
+
+        function editRow(index) {
+            const table = document.getElementById('data_table');
+            const row = table.rows[index + 1];
+            const columns = {{ columns|tojson }};
+            const updatedRecord = { 'index': index };
+            columns.forEach((col, i) => {
+                const input = row.cells[i].querySelector('input, select');
+                if (input) {
+                    updatedRecord[col] = input.value;
+                }
+            });
+            sendData('edit', updatedRecord);
+        }
+
+        function deleteRow(index) {
+            if (confirm('ต้องการลบแถวนี้หรือไม่?')) {
+                sendData('delete', { 'index': index });
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <h2>แก้ไขข้อมูล {{ data_type.replace('_', ' ').title() }}</h2>
+        
+        {% if data_type == 'sample_shift_data' %}
+            <form method="get" action="{{ url_for('edit_specific_data', data_type=data_type) }}">
+                <div class="form-group">
+                    <label for="shift_date">เลือกวันที่ (ShiftDate):</label>
+                    <input type="date" id="shift_date" name="shift_date" value="{{ shift_date }}">
+                </div>
+                <button type="submit" class="btn">กรองข้อมูล</button>
+                <a href="{{ url_for('edit_specific_data', data_type=data_type) }}" class="btn">ล้างการกรอง</a>
+            </form>
+            <br>
+        {% endif %}
+        
+        <button onclick="addRow()" class="btn">เพิ่มแถวใหม่</button>
+        <table id="data_table">
+            <thead>
+                <tr>
+                    {% for col in columns %}
+                        <th>{{ col }}</th>
+                    {% endfor %}
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for record in records %}
+                    <tr>
+                        {% for col in columns %}
+                            <td>
+                                <input type="text" value="{{ record[col] }}">
+                            </td>
+                        {% endfor %}
+                        <td>
+                            <button onclick="editRow({{ loop.index0 }})" class="btn">บันทึก</button>
+                            <button onclick="deleteRow({{ loop.index0 }})" class="btn">ลบ</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <br>
+        <a href="{{ url_for('edit_data') }}" class="btn">กลับไปเลือกข้อมูล</a>
+    </div>
+</body>
+</html>

@@ -1,27 +1,45 @@
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for,session
 import pandas as pd
 import datetime
 from filelock import FileLock
-from functools import lru_cache
+from functools import lru_cache,wraps
 from io import BytesIO
 from zoneinfo import ZoneInfo
+import os
 
 app = Flask(__name__)
 
 # รหัสผ่านสำหรับการเข้าถึงหน้า Export
+app.secret_key = 'Tiger'  # เปลี่ยนเป็นค่าที่ปลอดภัย
 EXPORT_PASSWORD = '935673'
 
 # กำหนดชื่อไฟล์ CSV
-EMPLOYEES_CSV = 'Employer.csv'
-MILL_EXTRUDE_CSV = 'Mill&Extrude.csv'
-SAMPLE_DATA_CSV = 'Sample_Shift_Data.csv'
-AUTOCOMPLETE_CSV = 'Autocomplete.csv'
-REMARK_CSV = 'Remark.csv'
+EMPLOYEES_CSV = os.path.join('data', 'Employer.csv')
+MILL_EXTRUDE_CSV = os.path.join('data', 'Mill&Extrude.csv')
+SAMPLE_DATA_CSV = os.path.join('data', 'Sample_Shift_Data.csv')
+AUTOCOMPLETE_CSV = os.path.join('data', 'Autocomplete.csv')
+REMARK_CSV = os.path.join('data', 'Remark.csv')
 
 LOCK_PATH = 'data.lock'
 
 # ตั้งค่า Timezone ของประเทศไทย
 TH_TZ = ZoneInfo('Asia/Bangkok')
+
+AVAILABLE_DATA_TYPES = {
+    'autocomplete': AUTOCOMPLETE_CSV,
+    'employer': EMPLOYEES_CSV,
+    'mill_extrude': MILL_EXTRUDE_CSV,
+    'remark': REMARK_CSV,
+    'sample_shift_data': SAMPLE_DATA_CSV  # เพิ่มข้อมูลนี้
+}
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 def load_data():
     with FileLock(LOCK_PATH):
@@ -32,35 +50,37 @@ def load_data():
         sample_data_df = pd.DataFrame()
         autocomplete_df = pd.DataFrame()
         remark_options = []
+        sample_shift_data = pd.DataFrame()  # เพิ่มตัวแปรนี้
 
         # โหลดข้อมูลจากไฟล์ CSV
         try:
-            employees_df = pd.read_csv(EMPLOYEES_CSV, encoding='utf-8-sig')
-            employees = employees_df.to_dict('records')
+            employees = pd.read_csv(EMPLOYEES_CSV).to_dict(orient='records')
         except Exception as e:
             print(f"Error loading {EMPLOYEES_CSV}: {e}")
 
         try:
-            mill_extrude_df = pd.read_csv(MILL_EXTRUDE_CSV, encoding='utf-8-sig')
-            extrude_options = mill_extrude_df['Extrude'].dropna().astype(str).tolist()
-            mill_options = mill_extrude_df['Mill'].dropna().astype(str).tolist()
+            mill_options = pd.read_csv(MILL_EXTRUDE_CSV)['mill'].tolist()
         except Exception as e:
             print(f"Error loading {MILL_EXTRUDE_CSV}: {e}")
 
         try:
-            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV, encoding='utf-8-sig')
-            sample_data_df['Batch'] = sample_data_df['Batch'].astype(str)
+            extrude_options = pd.read_csv(MILL_EXTRUDE_CSV)['extrude'].tolist()
+        except Exception as e:
+            print(f"Error loading {MILL_EXTRUDE_CSV}: {e}")
+
+        try:
+            sample_data_df = pd.read_csv(SAMPLE_DATA_CSV)
+            sample_shift_data = sample_data_df.to_dict(orient='records')
         except Exception as e:
             print(f"Error loading {SAMPLE_DATA_CSV}: {e}")
 
         try:
-            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV, encoding='utf-8-sig')
+            autocomplete_df = pd.read_csv(AUTOCOMPLETE_CSV)
         except Exception as e:
             print(f"Error loading {AUTOCOMPLETE_CSV}: {e}")
 
         try:
-            remark_df = pd.read_csv(REMARK_CSV, encoding='utf-8-sig')
-            remark_options = remark_df['Remark'].dropna().tolist()
+            remark_options = pd.read_csv(REMARK_CSV)['remark'].tolist()
         except Exception as e:
             print(f"Error loading {REMARK_CSV}: {e}")
 
@@ -68,7 +88,7 @@ def load_data():
             'employees': employees,
             'extrude_options': extrude_options,
             'mill_options': mill_options,
-            'sample_data': sample_data_df,
+            'sample_data': sample_shift_data,  # เพิ่มข้อมูลนี้
             'autocomplete_data': autocomplete_df,
             'remark_options': remark_options
         }
@@ -246,5 +266,81 @@ def download_data():
     except Exception as e:
         return f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {e}"
 
+# เส้นทางสำหรับเลือกและแก้ไขข้อมูล
+@app.route('/edit_data', methods=['GET', 'POST'])
+@login_required
+def edit_data():
+    if request.method == 'POST':
+        selected_type = request.form.get('data_type')
+        if selected_type in AVAILABLE_DATA_TYPES:
+            return redirect(url_for('edit_specific_data', data_type=selected_type))
+        else:
+            return redirect(url_for('edit_data'))
+    return render_template('select_data.html', data_types=AVAILABLE_DATA_TYPES.keys())
+
+@app.route('/edit/<data_type>', methods=['GET', 'POST'])
+@login_required
+def edit_specific_data(data_type):
+    if data_type not in AVAILABLE_DATA_TYPES:
+        return redirect(url_for('edit_data'))
+
+    csv_path = AVAILABLE_DATA_TYPES[data_type]
+    with FileLock(LOCK_PATH):
+        if request.method == 'POST':
+            action = request.json.get('action')
+            record = request.json.get('record')
+
+            try:
+                df = pd.read_csv(csv_path)
+                if action == 'add':
+                    df = df.append(record, ignore_index=True)
+                elif action == 'edit':
+                    index = record.pop('index')
+                    for key, value in record.items():
+                        df.at[index, key] = value
+                elif action == 'delete':
+                    index = record.get('index')
+                    df = df.drop(index).reset_index(drop=True)
+                df.to_csv(csv_path, index=False)
+                return jsonify({'success': True})
+            except Exception as e:
+                return jsonify({'success': False, 'message': str(e)})
+
+        # GET request
+        try:
+            df = pd.read_csv(csv_path)
+            # ตรวจสอบถ้าเป็น sample_shift_data ให้กรองตาม ShiftDate
+            shift_date = request.args.get('shift_date')
+            if data_type == 'sample_shift_data' and shift_date:
+                df['ShiftDate'] = pd.to_datetime(df['ShiftDate'], format='%d/%m/%Y').dt.date
+                filter_date = pd.to_datetime(shift_date, format='%Y-%m-%d').date()
+                df = df[df['ShiftDate'] == filter_date]
+            records = df.to_dict(orient='records')
+            columns = list(df.columns)
+            # สำหรับ sample_shift_data ซ่อนคอลัมน์ที่ไม่ต้องการ
+            if data_type == 'sample_shift_data':
+                hidden_columns = ['Start_Worktime', 'Stop_Worktime', 'Duration']
+                columns = [col for col in columns if col not in hidden_columns]
+        except Exception as e:
+            records = []
+            columns = []
+        return render_template('edit_data.html', data_type=data_type, records=records, columns=columns, shift_date=shift_date if data_type == 'sample_shift_data' else None)
+    
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == EXPORT_PASSWORD:
+            session['logged_in'] = True
+            return redirect(url_for('edit_data'))
+        else:
+            return render_template('login.html', error='รหัสผ่านไม่ถูกต้อง')
+    return render_template('login.html')
+
 if __name__ == '__main__':
+    # ตรวจสอบว่าไฟล์ CSV ทั้งหมดมีอยู่ ถ้าไม่ให้สร้างไฟล์ว่าง
+    for file in AVAILABLE_DATA_TYPES.values():
+        if not os.path.exists(file):
+            df_empty = pd.DataFrame()
+            df_empty.to_csv(file, index=False, encoding='utf-8-sig')
     app.run(debug=True)
